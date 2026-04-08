@@ -13,9 +13,9 @@ from models import TicketOrderingAction, TicketOrderingObservation
 backup_rng = np.random.default_rng(42)
 
 
-IMAGE_NAME = os.getenv("IMAGE_NAME", "ticket-ordering-env:latest")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+ENV_BASE = "https://startripper-openenv-ticket-ordering-env.hf.space"
 
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME = os.getenv("MODEL_NAME") or "llama-3.1-8b-instant"
 MAX_STEPS = 15
@@ -136,69 +136,69 @@ def get_model_action(client: OpenAI, obs: TicketOrderingObservation) -> Dict[str
 
 async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    env = await TicketOrderingEnv.from_docker_image(IMAGE_NAME)
-    # async with TicketOrderingEnv(base_url="localhost:8001") as env:
-    for task in [GenerationDifficulty.Easy, GenerationDifficulty.Medium, GenerationDifficulty.Hard]:
-        rewards: List[float] = []
-        steps_taken = 0
-        score = 0.0
-        success = False
+    async with TicketOrderingEnv(base_url=ENV_BASE) as env:
+        # async with TicketOrderingEnv(base_url="localhost:8001") as env:
+        for task in [GenerationDifficulty.Easy, GenerationDifficulty.Medium, GenerationDifficulty.Hard]:
+            rewards: List[float] = []
+            steps_taken = 0
+            score = 0.0
+            success = False
 
-        log_start(task=f"ticket_ordering_env_{task.name}", env="ticket_ordering_env", model=MODEL_NAME)
+            log_start(task=f"ticket_ordering_env_{task.name}", env="ticket_ordering_env", model=MODEL_NAME)
 
-        try:
-            result = await env.reset(difficulty=task.value)
-            obs = result.observation
-
-            for step in range(1, MAX_STEPS + 1):
-                if result.done:
-                    break
-
-                action_dict = get_model_action(client, obs)
-
-                action = TicketOrderingAction(
-                    candidate_priority=float(action_dict.get("candidate_priority", 0.0)),
-                    candidate_summary=str(action_dict.get("candidate_summary", ""))[:32],
-                    next_reference_ids=list(action_dict.get("next_reference_ids", [])),
-                    next_candidate_id=int(action_dict.get("next_candidate_id", 0)),
-                    end_ordering=bool(action_dict.get("end_ordering", False)),
-                )
-
-                result = await env.step(action)
+            try:
+                result = await env.reset(difficulty=task.value)
                 obs = result.observation
 
-                reward = result.reward or 0.0
-                done = result.done
-                error = None
+                for step in range(1, MAX_STEPS + 1):
+                    if result.done:
+                        break
 
-                rewards.append(reward)
-                steps_taken = step
+                    action_dict = get_model_action(client, obs)
 
-                log_step(
-                    step=step,
-                    action=str(action_dict),
-                    reward=reward,
-                    done=done,
-                    error=error,
-                )
+                    action = TicketOrderingAction(
+                        candidate_priority=float(action_dict.get("candidate_priority", 0.0)),
+                        candidate_summary=str(action_dict.get("candidate_summary", ""))[:32],
+                        next_reference_ids=list(action_dict.get("next_reference_ids", [])),
+                        next_candidate_id=int(action_dict.get("next_candidate_id", 0)),
+                        end_ordering=bool(action_dict.get("end_ordering", False)),
+                    )
 
-                if done:
-                    break
+                    result = await env.step(action)
+                    obs = result.observation
 
-            min_reward = -1.0
-            max_reward = 2.0
-            rewards_sum = sum(rewards)
-            rewards_sum -= min_reward
-            rewards_sum /= (max_reward - min_reward)
-            score = min(max(rewards_sum, 0.0), 1.0)
-            success = score >= SUCCESS_SCORE_THRESHOLD
+                    reward = result.reward or 0.0
+                    done = result.done
+                    error = None
 
-        finally:
-            try:
-                await env.close()
-            except Exception:
-                pass
-            log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+                    rewards.append(reward)
+                    steps_taken = step
+
+                    log_step(
+                        step=step,
+                        action=str(action_dict),
+                        reward=reward,
+                        done=done,
+                        error=error,
+                    )
+
+                    if done:
+                        break
+
+                min_reward = -1.0
+                max_reward = 2.0
+                rewards_sum = sum(rewards)
+                rewards_sum -= min_reward
+                rewards_sum /= (max_reward - min_reward)
+                score = min(max(rewards_sum, 0.0), 1.0)
+                success = score >= SUCCESS_SCORE_THRESHOLD
+
+            finally:
+                try:
+                    await env.close()
+                except Exception:
+                    pass
+                log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 if __name__ == "__main__":
