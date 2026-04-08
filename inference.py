@@ -1,0 +1,206 @@
+import os
+import asyncio
+import textwrap
+import numpy as np
+from openai import OpenAI
+from typing import List, Optional, Dict, Any
+
+from client import TicketOrderingEnv
+from problem_generator import GenerationDifficulty
+from models import TicketOrderingAction, TicketOrderingObservation
+
+
+backup_rng = np.random.default_rng(42)
+
+
+IMAGE_NAME = os.getenv("IMAGE_NAME", "ticket-ordering-env:latest")
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
+MODEL_NAME = os.getenv("MODEL_NAME") or "llama-3.3-70b-versatile"
+MAX_STEPS = 15
+TEMPERATURE = 0.0 # Kind of makes these models TOO deterministic / repeat things, oh well, rules are rules.
+MAX_TOKENS = 300
+SUCCESS_SCORE_THRESHOLD = 0.75
+
+SYSTEM_PROMPT = textwrap.dedent(
+    """
+    You are a ticket prioritization agent.
+
+    Given:
+    - ordering criteria
+    - reference tickets
+    - a candidate ticket
+    - heuristics from n of the most assigned and n of the least assigned tickets
+    - total number of tickets
+    - iterations completed so far
+
+    Your job:
+    - Assign a priority score to the candidate (relative to the references, must NOT be neutral / 0.0) (float, higher = more important)
+    - Write a short summary for the candidate (<=32 chars) (Part of that ticket's heuristic)
+    - Select next reference ticket ids (must be one of the keys from the heuristics)
+    - Select next candidate ticket id (must be one of the keys from the heuristics)
+    - Decide whether to end ordering (there is no need to end after iterations completed = total tickets since cross comparing tickets still may be valuable)
+
+    Respond with no fancy formatting, backticks or anything else, respond ONLY with PURE valid JSON in this format:
+    {
+      "candidate_priority": float,
+      "candidate_summary": string,
+      "next_reference_ids": [int],
+      "next_candidate_id": int,
+      "end_ordering": bool
+    }
+    """
+).strip()
+
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+
+
+def serialize_ticket(ticket: Any) -> Dict[str, Any]:
+    return {
+        "id": ticket.id,
+        "thread": [{"user": c.user, "content": c.content} for c in ticket.thread],
+        "heuristic": {
+            "priority": ticket.heuristic.priority,
+            "summary": ticket.heuristic.summary,
+            "times_assigned": ticket.heuristic.times_assigned,
+        },
+    }
+
+
+def build_user_prompt(obs: Any) -> str:
+    return textwrap.dedent(
+        f"""
+        Ordering criteria: {obs.ordering_criteria}
+
+        Reference tickets:
+        {[serialize_ticket(t) for t in obs.reference_tickets]}
+
+        Candidate ticket:
+        {serialize_ticket(obs.candidate_ticket)}
+
+        Existing heuristics:
+        { {k: v.model_dump() for k, v in obs.ticket_heuristics.items()} }
+
+        Total tickets: {obs.total_tickets}
+        Completed iterations: {obs.completed_iterations}
+
+        Decide the next action.
+        """
+    ).strip()
+
+
+def get_model_action(client: OpenAI, obs: TicketOrderingObservation) -> Dict[str, Any]:
+    user_prompt = build_user_prompt(obs)
+
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+
+        import json
+
+        return json.loads(text)
+    except Exception:
+        return {
+            "candidate_priority": backup_rng.uniform(low=0.0, high=1.0),
+            "candidate_summary": "issue",
+            "next_reference_ids": [],
+            "next_candidate_id": backup_rng.choice(list(obs.ticket_heuristics.keys())),
+            "end_ordering": False,
+        }
+
+
+async def main() -> None:
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # env = await TicketOrderingEnv.from_docker_image(IMAGE_NAME)
+    async with TicketOrderingEnv(base_url="localhost:8001") as env:
+        for task in [GenerationDifficulty.Easy, GenerationDifficulty.Medium, GenerationDifficulty.Hard]:
+            rewards: List[float] = []
+            steps_taken = 0
+            score = 0.0
+            success = False
+
+            log_start(task=f"ticket_ordering_env_{task.name}", env="ticket_ordering_env", model=MODEL_NAME)
+
+            try:
+                result = await env.reset(difficulty=task.value)
+                obs = result.observation
+                print(obs)
+
+                for step in range(1, MAX_STEPS + 1):
+                    if result.done:
+                        break
+
+                    action_dict = get_model_action(client, obs)
+
+                    action = TicketOrderingAction(
+                        candidate_priority=float(action_dict.get("candidate_priority", 0.0)),
+                        candidate_summary=str(action_dict.get("candidate_summary", ""))[:32],
+                        next_reference_ids=list(action_dict.get("next_reference_ids", [])),
+                        next_candidate_id=int(action_dict.get("next_candidate_id", 0)),
+                        end_ordering=bool(action_dict.get("end_ordering", False)),
+                    )
+
+                    result = await env.step(action)
+                    obs = result.observation
+
+                    reward = result.reward or 0.0
+                    done = result.done
+                    error = None
+
+                    rewards.append(reward)
+                    steps_taken = step
+
+                    log_step(
+                        step=step,
+                        action=str(action_dict),
+                        reward=reward,
+                        done=done,
+                        error=error,
+                    )
+
+                    if done:
+                        break
+
+                min_reward = -1.0
+                max_reward = 2.0
+                rewards_sum = sum(rewards)
+                rewards_sum -= min_reward
+                rewards_sum /= (max_reward - min_reward)
+                score = min(max(rewards_sum, 0.0), 1.0)
+                success = score >= SUCCESS_SCORE_THRESHOLD
+
+            finally:
+                try:
+                    await env.close()
+                except Exception:
+                    pass
+                log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
