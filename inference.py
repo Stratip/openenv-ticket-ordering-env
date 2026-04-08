@@ -134,9 +134,9 @@ def get_model_action(client: OpenAI, obs: TicketOrderingObservation) -> Dict[str
         }
 
 
-async def main() -> None:
+def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    async with TicketOrderingEnv(base_url=ENV_BASE) as env:
+    with TicketOrderingEnv(base_url=ENV_BASE).sync() as env:
         # async with TicketOrderingEnv(base_url="localhost:8001") as env:
         for task in [GenerationDifficulty.Easy, GenerationDifficulty.Medium, GenerationDifficulty.Hard]:
             rewards: List[float] = []
@@ -147,7 +147,7 @@ async def main() -> None:
             log_start(task=f"ticket_ordering_env_{task.name}", env="ticket_ordering_env", model=MODEL_NAME)
 
             try:
-                result = await env.reset(difficulty=task.value)
+                result = env.reset(difficulty=task.value)
                 obs = result.observation
 
                 for step in range(1, MAX_STEPS + 1):
@@ -164,7 +164,7 @@ async def main() -> None:
                         end_ordering=bool(action_dict.get("end_ordering", False)),
                     )
 
-                    result = await env.step(action)
+                    result = env.step(action)
                     obs = result.observation
 
                     reward = result.reward or 0.0
@@ -195,11 +195,11 @@ async def main() -> None:
 
             finally:
                 try:
-                    await env.close()
+                    env.close()
                 except Exception:
                     pass
                 log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
