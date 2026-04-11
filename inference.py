@@ -37,7 +37,7 @@ SYSTEM_PROMPT = textwrap.dedent(
     - iterations completed so far
 
     Your job:
-    - Assign a priority score to the candidate (relative to the references, must NOT be neutral / 0) (int, higher = more important)
+    - Assign a priority score to the candidate (0 to 100) (int, 0 = not important AT ALL, 100 = EXTREMELY important)
     - Write a short summary for the candidate (<=32 chars) (Part of that ticket's heuristic)
     - Select next reference ticket ids (must be one of the keys from the heuristics)
     - Select next candidate ticket id (must be one of the keys from the heuristics)
@@ -143,7 +143,7 @@ def get_model_action(client: OpenAI, obs: TicketOrderingObservation) -> Dict[str
 def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     with TicketOrderingEnv(base_url=ENV_BASE).sync() as env:
-        # async with TicketOrderingEnv(base_url="localhost:8001") as env:
+    # with TicketOrderingEnv(base_url="localhost:8001").sync() as env:
         for task in [GenerationDifficulty.Easy, GenerationDifficulty.Medium, GenerationDifficulty.Hard]:
             rewards: List[float] = []
             steps_taken = 0
