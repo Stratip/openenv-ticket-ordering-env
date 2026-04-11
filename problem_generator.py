@@ -1,11 +1,16 @@
-import re
-import numpy as np
+from __future__ import annotations
+
 from enum import Enum
-from typing import DefaultDict
-from models import ThreadComment, Ticket, TicketHeuristic
 
-
-rng = np.random.default_rng(42)
+try:
+    # When run from within the `ticket_ordering/` package.
+    from models import ThreadComment, Ticket, TicketHeuristic
+except ModuleNotFoundError as e:  # pragma: no cover
+    # When imported from `ticket_ordering.server` (relative import context).
+    # Only fall back when *this* module can't be found; don't mask missing dependencies.
+    if e.name not in {"models"}:
+        raise
+    from .models import ThreadComment, Ticket, TicketHeuristic
 
 
 class GenerationDifficulty(Enum):
@@ -14,321 +19,179 @@ class GenerationDifficulty(Enum):
     Hard = 2
 
 
-NAMES = [
-    "Aarav", "Emma", "Liam", "Olivia", "Noah", "Ava", "Sophia", "Isabella", "Mia", "Charlotte",
-    "Amir", "Fatima", "Hassan", "Layla", "Omar", "Yasmin", "Ali", "Zara", "Ibrahim", "Noor",
-    "Wei", "Yuki", "Hiroshi", "Mei", "Sora", "Jin", "Minho", "Haruto", "Aiko", "Ren",
-    "Carlos", "Sofia", "Mateo", "Lucia", "Diego", "Valentina", "Juan", "Camila", "Luis", "Elena",
-    "Ethan", "Abigail", "James", "Emily", "Benjamin", "Ella", "Lucas", "Scarlett", "Henry", "Grace",
-    "Arjun", "Priya", "Rohan", "Ananya", "Vikram", "Sneha", "Kiran", "Isha", "Rahul", "Neha",
-    "Leo", "Chloe", "Gabriel", "Lily", "Samuel", "Zoe", "Daniel", "Hannah", "Matthew", "Aria",
-    "Alexander", "Nina", "Mikhail", "Anastasia", "Ivan", "Svetlana", "Dmitry", "Olga", "Sergey", "Irina",
-    "Kwame", "Ama", "Kofi", "Zuri", "Abena", "Tariq", "Amina", "Malik", "Imani", "Nia",
-    "Oscar", "Freja", "Lars", "Ingrid", "Bjorn", "Astrid", "Erik", "Sigrid", "Magnus", "Elin"
-]
+def _ticket(ticket_id: int, thread: list[tuple[str, str]]) -> Ticket:
+    return Ticket(
+        id=ticket_id,
+        thread=[ThreadComment(user=user, content=content) for user, content in thread],
+        heuristic=TicketHeuristic(),
+    )
 
 
-DIFFICULTY_UNCERTAINTY_MAP = {
-    GenerationDifficulty.Easy: 0.0,
-    GenerationDifficulty.Medium: 0.0833,
-    GenerationDifficulty.Hard: 0.1666,
-}
+def _easy_problem() -> tuple[str, list[Ticket]]:
+    # Easy: 1:1 correlation between what you read and the correct ordering.
+    # Ordering criteria is explicit and each ticket states its severity clearly.
+    criteria = "severity"
 
-
-CRITERIA = [
-    "severity",        # how bad
-    "fix ease",        # how easy to fix
-    "scope backend",   # backend impact
-    "scope frontend",  # frontend impact
-    "user impact",     # perceived impact
-]
-CRITERIA_DIST_RANGES = {
-    "severity": (0.15, 1.9),
-    "fix ease": (0.2, 1.7),
-    "scope backend": (0.5, 1.0),
-    "scope frontend": (0.0, 0.5),
-    "user impact": (0.5, 2.9),
-}
-
-ISSUE_TYPES = [
-    ("crash", {
-        "severity": 0.9,
-        "fix ease": 0.8,
-        "user impact": 0.9,
-    }),
-    ("failure", {
-        "severity": 0.75,
-        "fix ease": 0.7,
-        "user impact": 0.8,
-    }),
-    ("bug", {
-        "severity": 0.4,
-        "fix ease": 0.4,
-        "user impact": 0.5,
-    }),
-    ("slowdown", {
-        "severity": 0.35,
-        "fix ease": 0.5,
-        "user impact": 0.6,
-    }),
-    ("feature request", {
-        "severity": 0.05,
-        "fix ease": 0.1,
-        "user impact": 0.3,
-    }),
-]
-
-SYSTEM_PARTS = [
-    ("lookup API", {
-        "scope backend": 1.0,
-        "scope frontend": 0.1,
-        "user impact": 0.1,
-    }),
-    ("bot API", {
-        "scope backend": 1.0,
-        "scope frontend": 0.0,
-        "user impact": 0.1,
-    }),
-    ("login system", {
-        "scope backend": 0.5,
-        "scope frontend": 0.5,
-        "user impact": 1.0,
-    }),
-    ("automatic curation", {
-        "scope backend": 0.8,
-        "scope frontend": 0.3,
-        "user impact": 0.25,
-    }),
-    ("relationship routing", {
-        "scope backend": 0.75,
-        "scope frontend": 0.25,
-        "user impact": 0.2,
-    }),
-    ("trend tracker", {
-        "scope backend": 0.9,
-        "scope frontend": 0.2,
-        "user impact": 0.2,
-    }),
-]
-
-MODIFIERS = [
-    ("minor", {
-        "severity": 0.1,
-        "fix ease": 0.9,
-        "user impact": 0.1,
-    }),
-    ("intermittent", {
-        "severity": 0.2,
-        "fix ease": 0.4,
-        "user impact": 0.2,
-    }),
-    ("random", {
-        "severity": 0.5,
-        "fix ease": 0.1,
-        "user impact": 0.45,
-    }),
-    ("unexpected", {
-        "severity": 0.8,
-        "fix ease": 0.5,
-        "user impact": 0.75,
-    }),
-    ("severe", {
-        "severity": 0.75,
-        "fix ease": 0.5,
-        "user impact": 0.8,
-    }),
-    ("critical", {
-        "severity": 0.9,
-        "fix ease": 0.5,
-        "user impact": 0.9,
-    }),
-    ("disastrous", {
-        "severity": 1.0,
-        "fix ease": 0.5,
-        "user impact": 1.0,
-    }),
-]
-
-CONTEXTS = [
-    "during normal usage",
-    "under heavy user load",
-    "under heavy API load",
-    "fixed time after deployment",
-    "after db migration",
-]
-
-ACTIONS = [
-    "pressing action button {random}",
-    "opening dashboard",
-    "registering on platform",
-    "updating {random} multiple times within {random2} seconds",
-    "removing post",
-    "replying to user",
-    "submitting poll",
-    "making post"
-]
-
-NEW_TEMPLATES = [
-    "{modifier} {issue} affecting {system} {context}",
-    "{issue} in {system} triggered by {action}",
-    "{modifier} {issue} when {action} in {system}",
-    
-    "users experience {modifier} {issue} in {system} {context}",
-    "multiple users report {issue} while {action}",
-    "user reports {issue} after {action} {context}",
-
-    "{action} leads to {modifier} {issue} in {system}",
-    "{system} shows {modifier} behavior when {action}",
-    
-    "{issue} detected in {system} {context}",
-    "{modifier} degradation in {system} {context}",
-    
-    "{issue} in {system} after {action} {context}",
-    "{modifier} issue observed in {system} when {action} {context}",
-
-    "{modifier} {issue} impacting users during {context}",
-    "{issue} causing failures in {system} under {context}",
-]
-
-
-def fill_action(action_template):
-    fillers = [
-        "profile", "settings", "feed", "post", "account",
-        "preferences", "notification settings"
+    # Tickets are returned in optimal order (lowest severity -> highest severity).
+    tickets = [
+        _ticket(
+            10,
+            [
+                ("Ava", "Minor cosmetic: button label is slightly misaligned on the settings page. No functional impact."),
+            ],
+        ),
+        _ticket(
+            11,
+            [
+                ("Noah", "Low severity bug: typo in confirmation email subject line. Everything still sends correctly."),
+            ],
+        ),
+        _ticket(
+            12,
+            [
+                ("Mia", "Medium severity: search sometimes returns stale results until refresh. Workaround: refresh page."),
+            ],
+        ),
+        _ticket(
+            13,
+            [
+                ("Liam", "High severity: checkout fails for some users with 'payment method unavailable'. Blocks purchases."),
+            ],
+        ),
+        _ticket(
+            14,
+            [
+                ("Emma", "Critical severity: app crashes on launch for all Android users after latest release. Blocks all usage."),
+            ],
+        ),
     ]
-    numbers = ["2", "3", "5", "10", "30"]
-
-    result = action_template
-    result = result.replace("{random}", rng.choice(fillers))
-    result = result.replace("{random2}", rng.choice(numbers))
-    return result
+    return criteria, tickets
 
 
-def maybe(value, probability=0.7):
-    return value if rng.random() < probability else ""
+def _medium_problem() -> tuple[str, list[Ticket]]:
+    # Medium: the target criteria is clear, but there is mild misdirection:
+    # - some tickets are scary but affect few users
+    # - some are boring but affect many users
+    criteria = "user impact"
+
+    # Tickets are returned in optimal order (lowest user impact -> highest user impact).
+    tickets = [
+        _ticket(
+            20,
+            [
+                ("Sofia", "Edge case: admin-only export occasionally omits one optional column. Affects a single internal admin."),
+            ],
+        ),
+        _ticket(
+            21,
+            [
+                ("Diego", "Rare crash: app closes when opening a specific legacy report. Only happens on an old device model."),
+            ],
+        ),
+        _ticket(
+            22,
+            [
+                ("Priya", "Moderate impact: password reset email is delayed by ~5 minutes during peak hours. Users can still log in otherwise."),
+            ],
+        ),
+        _ticket(
+            23,
+            [
+                ("Ethan", "High impact: notifications are not delivered reliably, causing users to miss replies. Many users report it daily."),
+            ],
+        ),
+        _ticket(
+            24,
+            [
+                ("Zara", "Very high impact: new user signup frequently fails with 'Try again later'. Large portion of new users affected."),
+            ],
+        ),
+        _ticket(
+            25,
+            [
+                ("Layla", "Extreme impact: login fails intermittently for a large segment of users. Reports across regions; users cannot access accounts."),
+            ],
+        ),
+    ]
+    return criteria, tickets
 
 
-def clean_text(text):
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+def _hard_problem() -> tuple[str, list[Ticket]]:
+    # Hard: cross-ticket references and clarifications.
+    # Users may exaggerate, misunderstand, or report symptoms; other tickets clarify root cause/scope.
+    criteria = "user impact"
+
+    # Tickets are returned in optimal order (lowest user impact -> highest user impact),
+    # but you need to read carefully because early reports can be misleading.
+    tickets = [
+        _ticket(
+            30,
+            [
+                ("Ren", "User report: 'Everything is broken' after clicking Save in settings. Claims app is unusable."),
+                ("Aiko", "Support follow-up: reproduced once. Looks like only the settings page shows an error toast; navigation still works."),
+                ("Ren", "Additional detail: error text says 'Invalid timezone'. User had entered 'PST' in a freeform field."),
+            ],
+        ),
+        _ticket(
+            31,
+            [
+                ("Carlos", "Report: profile pictures not updating. Looks like a caching issue; eventually correct after a few minutes."),
+                ("Elena", "Engineering note: affects only the thumbnail URL; full-size image updates immediately."),
+            ],
+        ),
+        _ticket(
+            32,
+            [
+                ("Hassan", "Complaint: 'Notifications are totally down'."),
+                ("Noor", "Triage: actually only push notifications on iOS 16; in-app notifications still appear."),
+                ("Hassan", "Reference: similar symptoms mentioned in ticket #34, but that one seems Android-only."),
+            ],
+        ),
+        _ticket(
+            33,
+            [
+                ("Arjun", "Users report they are being 'charged twice' at checkout."),
+                ("Grace", "Finance: no double charges in payment provider logs. Likely duplicate confirmation screens."),
+                ("Arjun", "Support: users see two success messages if they refresh quickly."),
+                ("Grace", "Engineering: this is a UI idempotency issue; money is not duplicated. Still causes high confusion and support load."),
+            ],
+        ),
+        _ticket(
+            34,
+            [
+                ("Mateo", "Android users: app freezes on startup on slow networks. 'Stuck forever'."),
+                ("Emily", "Clarification: only first launch after install; subsequent launches are fine. Workaround: wait ~30 seconds."),
+                ("Mateo", "Reference: ticket #35 suggests the underlying API is timing out for many requests, not just first launch."),
+            ],
+        ),
+        _ticket(
+            35,
+            [
+                ("Wei", "Multiple users: login intermittently fails with 'Something went wrong'."),
+                ("Hannah", "On-call: correlates with auth service timeouts; affects all platforms during bursts."),
+                ("Wei", "Cross-check: explains the startup freeze in ticket #34 (waiting on auth bootstrap)."),
+                ("Hannah", "Impact: users cannot access accounts during timeout windows; widespread reports."),
+            ],
+        ),
+    ]
+    return criteria, tickets
 
 
-def combine_scores(
-    issue, system, modifier,
-    
-    uncertainty = 0.0,
-    importances = {
-        "severity": 0.2,
-        "fix ease": 0.2,
-        "scope backend": 0.2,
-        "scope frontend": 0.2,
-        "user impact": 0.2,
-    }
-):
-    scores = DefaultDict(float)
+def generate_problem_statement(
+    difficulty: GenerationDifficulty = GenerationDifficulty.Medium,
+) -> tuple[str, list[Ticket]]:
+    """
+    Generate a deterministic ticket-ordering problem.
 
-    for key, value in issue.items():
-        scores[key] += value
-    for key, value in system.items():
-        scores[key] += value
-    for key, value in modifier.items():
-        scores[key] += value
+    Important: the returned ticket list is already in the optimal order expected by the environment.
+    The server will shuffle tickets for the agent, but it uses this list order as ground truth.
+    """
+    if difficulty == GenerationDifficulty.Easy:
+        return _easy_problem()
+    if difficulty == GenerationDifficulty.Medium:
+        return _medium_problem()
+    if difficulty == GenerationDifficulty.Hard:
+        return _hard_problem()
 
-    combined_score = 0.0
-    for criteria in CRITERIA:
-        _min, _max  = CRITERIA_DIST_RANGES[criteria]
-        scores[criteria] -= _min
-        scores[criteria] /= _max - _min
-
-        scores[criteria] += rng.uniform(-uncertainty, +uncertainty)
-
-        scores[criteria] = min(scores[criteria], 1.0)
-        scores[criteria] = max(scores[criteria], 0.0)
-
-        scores[criteria] *= importances[criteria]
-
-        combined_score += scores[criteria]
-
-    combined_score = min(combined_score, 1.0)
-    combined_score = max(combined_score, 0.0)
-
-    return combined_score
-
-
-def generate_ticket_data(
-    uncertainty = 0.0,
-    importances = {
-        "severity": 0.2,
-        "fix ease": 0.2,
-        "scope backend": 0.2,
-        "scope frontend": 0.2,
-        "user impact": 0.2,
-    }
-):
-    template = rng.choice(NEW_TEMPLATES)
-
-    issue_name, issue_vals = rng.choice(ISSUE_TYPES) # type: ignore
-    system_name, system_vals = rng.choice(SYSTEM_PARTS) # type: ignore
-    modifier_name, modifier_vals = rng.choice(MODIFIERS) # type: ignore
-    context = rng.choice(CONTEXTS)
-    action_template = rng.choice(ACTIONS)
-
-    action = fill_action(action_template)
-
-    text = template.format(
-        modifier=maybe(modifier_name),
-        issue=issue_name,
-        system=system_name,
-        context=context,
-        action=action,
-    )
-    combined_score = combine_scores(
-        issue_vals, system_vals, modifier_vals,
-        uncertainty=uncertainty,
-        importances=importances
-    )
-
-    return clean_text(text), combined_score
-
-
-def generate_problem_statement(difficulty: GenerationDifficulty = GenerationDifficulty.Medium) -> tuple[str, list[Ticket]]:
-    rng = np.random.default_rng(42 + difficulty.value)
-
-    criteria_str = rng.choice(CRITERIA)
-    criteria_importances = {
-        "severity": 0.2,
-        "fix ease": 0.2,
-        "scope backend": 0.2,
-        "scope frontend": 0.2,
-        "user impact": 0.2,
-    }
-    for key in criteria_importances:
-        if key == criteria_str: criteria_importances[key] = 0.8
-        else: criteria_importances[key] = 0.05
-
-    uncertainty = DIFFICULTY_UNCERTAINTY_MAP[difficulty]
-
-    ids = set()
-    tickets_with_scores = []
-    for _ in range(rng.integers(5, 10)):
-        while True:
-            id = rng.integers(0, 15, dtype=int)
-            if id not in ids:
-                ids.add(id)
-                break
-
-        text, score = generate_ticket_data(uncertainty, criteria_importances)
-
-        ticket = Ticket(
-            id=id,
-            thread=[ThreadComment(user=rng.choice(NAMES), content=text)],
-            heuristic=TicketHeuristic()
-        )
-
-        tickets_with_scores.append((ticket, score))
-
-    tickets_with_scores.sort(key=lambda x: x[1])
-
-    tickets = [t for t, _ in tickets_with_scores]
-
-    return criteria_str, tickets
+    # Defensive fallback: treat unknown as medium.
+    return _medium_problem()
