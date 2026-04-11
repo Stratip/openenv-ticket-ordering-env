@@ -13,8 +13,46 @@ tags:
 
 # Ticket Ordering Environment
 
-An environment that can be used to prioritize tickets by an arbitrary metric of importance. Perfect for ordering things like GitHub issues,
-Jira tickets, etc.
+**Ticket Ordering** is an environment for turning a messy “who shouts loudest” backlog into a **repeatable, auditable ordering** of work items (GitHub issues, Jira tickets, support requests, bugs, etc.) using an **objective scoring rubric**.
+
+It’s especially useful when **QA testers**, **engineering**, and **third-party stakeholders** (customers, partners, vendors) have **contradictory priorities** depending on the situation:
+
+- QA may optimize for *risk reduction* and *release confidence*.
+- Third parties may optimize for *their own timelines*, *contracts*, and *visibility*.
+- Engineering may optimize for *system health*, *tech debt*, and *delivery cost*.
+
+When incentives diverge, “priority” becomes a negotiation. This project makes priority **measurable** by asking an agent (human or model) to assign scores *relative to a shared criteria string* and provides feedback via a reward function—so you can iterate toward a ranking that’s **consistent**, not political.
+
+## Why this matters
+
+Teams usually fail at prioritization for one of two reasons:
+
+- **Subjectivity**: two people read the same ticket and give different priorities for valid reasons.
+- **Context drift**: the “right” priority changes with release phase, customer escalations, regressions, or risk posture.
+
+An “objective scorer” doesn’t remove judgment—it **structures it**. You get:
+
+- **Comparable decisions**: scores are on the same scale across tickets.
+- **Explainability**: the criteria and summaries capture the *why*, not just the number.
+- **Repeatability**: rerun ordering when constraints change (release week vs normal week) and measure deltas.
+- **Less conflict**: disagreements become “which criterion weights are wrong?” rather than “your priority is wrong.”
+
+## What you get
+
+- **A FastAPI + WebSocket server** exposing the environment
+- **A Python client** (`TicketOrderingEnv`) with Docker and direct-URL connection options
+- **A web UI** (when deployed) for interacting with the environment
+- **A training/evaluation loop** primitive: order tickets, get reward, improve the scorer
+
+## Table of contents
+
+- [Quick Start](#quick-start)
+- [Building the Docker Image](#building-the-docker-image)
+- [Deploying to Hugging Face Spaces](#deploying-to-hugging-face-spaces)
+- [Environment Details](#environment-details)
+- [Advanced Usage](#advanced-usage)
+- [Development & Testing](#development--testing)
+- [Project Structure](#project-structure)
 
 ## Quick Start
 
@@ -30,13 +68,15 @@ try:
 
     # Reset
     result = ticket_orderingenv.reset()
-    print(f"Reset: {result.observation}")
+    obs = result.observation
+    print(f"Reset: {obs}")
 
     result = ticket_orderingenv.step(
         TicketOrderingAction(
-            candidate_priority=0.5,
+            candidate_priority=50,
             candidate_summary="issue",
             next_reference_ids=[],
+            # Pick a ticket ID to evaluate next (example strategy)
             next_candidate_id=random.choice(list(obs.ticket_heuristics.keys())),
             end_ordering=False,
         )
@@ -124,7 +164,7 @@ The deployed space includes:
 
 ### Action
 **TicketOrderingAction**: Contains the following fields:
-- `candidate_priority` (float) - Assigned priority score for the candidate ticket, relative to other tickets.
+- `candidate_priority` (int) - Assigned priority score for the candidate ticket, relative to other tickets.
 - `candidate_summary` (str) - Short summary describing the candidate ticket, capturing key context for future comparisons.
 - `next_reference_ids` (list[int]) - IDs of tickets to request as references in the next step, used to guide further comparisons.
 - `next_candidate_id` (int) - ID of the next ticket to evaluate as the candidate in the following step.
