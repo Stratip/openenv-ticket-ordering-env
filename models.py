@@ -21,7 +21,7 @@ class ThreadComment(BaseModel):
     content: str = Field(min_length=1, max_length=1024, description="Content of the user's comment on the thread.")
 
 class TicketHeuristic(BaseModel):
-    priority: float = Field(default=0.0, description="Relative priority of the ticket. Priority is only meaningful relative to other tickets.")
+    priority: int = Field(default=0, description="Relative priority of the ticket. Priority is only meaningful relative to other tickets.")
     summary: str = Field(default="", max_length=32, description="Summary of the ticket. Useful for agents to store context for tricky tickets.")
     times_assigned: int = Field(default=0, description="Times the heuristic has been assigned. Loose metric of 'certainty' (more assignments ~= more certain)")
 
@@ -74,7 +74,7 @@ class TicketOrderingObservation(Observation):
 
 class TicketOrderingAction(Action):
     """Action for the Ticket Ordering environment."""
-    candidate_priority: float = Field(
+    candidate_priority: int = Field(
         description="Assigned priority score for the candidate ticket, relative to other tickets."
     )
     candidate_summary: str = Field(

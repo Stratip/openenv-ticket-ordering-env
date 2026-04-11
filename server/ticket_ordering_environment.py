@@ -66,7 +66,7 @@ class TicketOrderingEnvironment(Environment):
         self._current_candidate: Ticket = Ticket(
             id=0,
             thread=[],
-            heuristic=TicketHeuristic(priority=0.0, summary="")
+            heuristic=TicketHeuristic(priority=0, summary="")
         )
         self._current_references: list[Ticket] = []
         self._current_heuristics: dict[int, TicketHeuristic] = {}

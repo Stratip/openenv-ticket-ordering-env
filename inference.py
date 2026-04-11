@@ -36,7 +36,7 @@ SYSTEM_PROMPT = textwrap.dedent(
     - iterations completed so far
 
     Your job:
-    - Assign a priority score to the candidate (relative to the references, must NOT be neutral / 0.0) (float, higher = more important)
+    - Assign a priority score to the candidate (relative to the references, must NOT be neutral / 0) (int, higher = more important)
     - Write a short summary for the candidate (<=32 chars) (Part of that ticket's heuristic)
     - Select next reference ticket ids (must be one of the keys from the heuristics)
     - Select next candidate ticket id (must be one of the keys from the heuristics)
@@ -44,7 +44,7 @@ SYSTEM_PROMPT = textwrap.dedent(
 
     Respond with no fancy formatting, backticks or anything else, respond ONLY with PURE valid JSON in this format:
     {
-      "candidate_priority": float,
+      "candidate_priority": int,
       "candidate_summary": string,
       "next_reference_ids": [int],
       "next_candidate_id": int,
@@ -126,7 +126,7 @@ def get_model_action(client: OpenAI, obs: TicketOrderingObservation) -> Dict[str
         return json.loads(text)
     except Exception:
         return {
-            "candidate_priority": backup_rng.uniform(low=0.0, high=1.0),
+            "candidate_priority": int(backup_rng.integers(low=1, high=101)),
             "candidate_summary": "issue",
             "next_reference_ids": [],
             "next_candidate_id": backup_rng.choice(list(obs.ticket_heuristics.keys())),
@@ -157,7 +157,7 @@ def main() -> None:
                     action_dict = get_model_action(client, obs)
 
                     action = TicketOrderingAction(
-                        candidate_priority=float(action_dict.get("candidate_priority", 0.0)),
+                        candidate_priority=int(action_dict.get("candidate_priority", 0)),
                         candidate_summary=str(action_dict.get("candidate_summary", ""))[:32],
                         next_reference_ids=list(action_dict.get("next_reference_ids", [])),
                         next_candidate_id=int(action_dict.get("next_candidate_id", 0)),
