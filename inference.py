@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 
 from client import TicketOrderingEnv
 from problem_generator import GenerationDifficulty
-from models import TicketOrderingAction, TicketOrderingObservation
+from models import TicketHeuristic, TicketOrderingAction, TicketOrderingObservation
 
 
 backup_rng = np.random.default_rng(42)
@@ -22,6 +22,7 @@ MAX_STEPS = 15
 TEMPERATURE = 0.0 # Kind of makes these models TOO deterministic / repeat things, oh well, rules are rules.
 MAX_TOKENS = 300
 SUCCESS_SCORE_THRESHOLD = 0.75
+UNASSIGNED_HEURISTIC = "unassigned"
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
@@ -31,7 +32,7 @@ SYSTEM_PROMPT = textwrap.dedent(
     - ordering criteria
     - reference tickets
     - a candidate ticket
-    - heuristics from n of the most assigned and n of the least assigned tickets
+    - heuristics from n most- and least-assigned tickets (times_assigned = prior steps as candidate; 0 until one completes, including first-time candidate; priority/summary "unassigned" while 0)
     - total number of tickets
     - iterations completed so far
 
@@ -72,15 +73,20 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
 
 
+def serialize_heuristic(h: TicketHeuristic) -> Dict[str, Any]:
+    ta = h.times_assigned
+    return {
+        "priority": UNASSIGNED_HEURISTIC if ta == 0 else h.priority,
+        "summary": UNASSIGNED_HEURISTIC if ta == 0 else h.summary,
+        "times_assigned": ta,
+    }
+
+
 def serialize_ticket(ticket: Any) -> Dict[str, Any]:
     return {
         "id": ticket.id,
         "thread": [{"user": c.user, "content": c.content} for c in ticket.thread],
-        "heuristic": {
-            "priority": ticket.heuristic.priority,
-            "summary": ticket.heuristic.summary,
-            "times_assigned": ticket.heuristic.times_assigned,
-        },
+        "heuristic": serialize_heuristic(ticket.heuristic),
     }
 
 
@@ -96,7 +102,7 @@ def build_user_prompt(obs: Any) -> str:
         {serialize_ticket(obs.candidate_ticket)}
 
         Existing heuristics:
-        { {k: v.model_dump() for k, v in obs.ticket_heuristics.items()} }
+        { {k: serialize_heuristic(v) for k, v in obs.ticket_heuristics.items()} }
 
         Total tickets: {obs.total_tickets}
         Completed iterations: {obs.completed_iterations}
