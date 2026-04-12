@@ -63,6 +63,7 @@ class TicketOrderingEnvironment(Environment):
         """Initialize the ticket_ordering environment."""
 
         self._config = TicketOrderingConfig()
+        self._episode_max_steps: int = self._config.max_steps
 
         self._reset_count = 0
 
@@ -89,12 +90,41 @@ class TicketOrderingEnvironment(Environment):
         self._current_references: list[Ticket] = []
         self._current_heuristics: dict[int, TicketHeuristic] = {}
 
+    def _resolve_episode_max_steps(
+        self,
+        n: int,
+        *,
+        max_steps: Optional[int] = None,
+        max_steps_scale: Optional[float] = None,
+        max_steps_cap: Optional[int] = None,
+        max_steps_n_exponent: Optional[float] = None,
+    ) -> int:
+        """Compute step budget from config and optional reset() overrides."""
+        cfg = self._config
+        ms = cfg.max_steps if max_steps is None else max_steps
+        scale = cfg.max_steps_scale if max_steps_scale is None else max_steps_scale
+        mcap = cfg.max_steps_cap if max_steps_cap is None else max_steps_cap
+        exp = cfg.max_steps_n_exponent if max_steps_n_exponent is None else max_steps_n_exponent
+
+        if scale is not None:
+            if scale <= 0:
+                raise ValueError("max_steps_scale must be positive when set")
+            raw = scale * (float(n) ** exp)
+            steps = max(1, int(round(raw)))
+            if mcap is not None:
+                steps = min(steps, mcap)
+            return steps
+        return max(1, ms)
 
     def reset(
         self,
         seed: Optional[int] = 42,
         episode_id: Optional[str] = str(uuid4()),
         difficulty: Optional[int] = GenerationDifficulty.Medium.value,
+        max_steps: Optional[int] = None,
+        max_steps_scale: Optional[float] = None,
+        max_steps_cap: Optional[int] = None,
+        max_steps_n_exponent: Optional[float] = None,
         **kwargs: Any,
     ) -> TicketOrderingObservation:
         """
@@ -125,6 +155,14 @@ class TicketOrderingEnvironment(Environment):
         )
         self._state_id_index_map = self._make_id_index_map(self._state.tickets)
 
+        self._episode_max_steps = self._resolve_episode_max_steps(
+            len(shuffled_tickets),
+            max_steps=max_steps,
+            max_steps_scale=max_steps_scale,
+            max_steps_cap=max_steps_cap,
+            max_steps_n_exponent=max_steps_n_exponent,
+        )
+
         self._current_candidate = self._state.tickets[0]
         self._current_references = self._state.tickets[0:1]
         self._current_heuristics = self.select_heuristics(self._state)
@@ -140,7 +178,8 @@ class TicketOrderingEnvironment(Environment):
             candidate_ticket=self._current_candidate,
             ticket_heuristics=self._current_heuristics,
             total_tickets=len(self._state.tickets),
-            completed_iterations=self._state.step_count
+            completed_iterations=self._state.step_count,
+            max_steps=self._episode_max_steps,
         )
 
 
@@ -212,10 +251,10 @@ class TicketOrderingEnvironment(Environment):
     def select_heuristics(self, state: TicketOrderingState) -> dict[int, TicketHeuristic]:
         heuristics = {}
 
-        assert self._config.max_heurestics >= 2
-        assert self._config.max_heurestics % 2 == 0
+        assert self._config.max_heuristics >= 2
+        assert self._config.max_heuristics % 2 == 0
 
-        n = self._config.max_heurestics // 2
+        n = self._config.max_heuristics // 2
         largest = heapq.nlargest(n, state.tickets, key=lambda x: (x.heuristic.times_assigned, self.rng.random()))
         smallest = heapq.nsmallest(n, state.tickets, key=lambda x: (x.heuristic.times_assigned, self.rng.random()))
 
@@ -236,7 +275,7 @@ class TicketOrderingEnvironment(Environment):
         action: TicketOrderingAction,
     ) -> TicketOrderingObservation:
         observation = TicketOrderingObservation(
-            done=action.end_ordering or (new_state.step_count >= self._config.max_steps),
+            done=action.end_ordering or (new_state.step_count >= self._episode_max_steps),
             reward=self.construct_reward(previous_state, new_state),
 
             ordering_criteria=new_state.ordering_criteria,
@@ -245,7 +284,8 @@ class TicketOrderingEnvironment(Environment):
             ticket_heuristics=self._current_heuristics,
 
             total_tickets=len(new_state.tickets),
-            completed_iterations=new_state.step_count
+            completed_iterations=new_state.step_count,
+            max_steps=self._episode_max_steps,
         )
 
         return observation

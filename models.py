@@ -12,7 +12,9 @@ tickets (e.g. Jira tickets, Github issues) according to an arbitrary (but clearl
 """
 
 
-from pydantic import BaseModel, Field
+from typing import Optional
+
+from pydantic import BaseModel, Field, model_validator
 from openenv.core.env_server import State, Observation, Action
 
 
@@ -47,9 +49,33 @@ class Ticket(BaseModel):
 
 
 class TicketOrderingConfig(BaseModel):
-    max_steps: int = Field(default=50, description="Maximum number of steps in an episode.")
+    max_steps: int = Field(
+        default=50,
+        ge=1,
+        description="Fixed maximum steps per episode when max_steps_scale is not set.",
+    )
+    max_steps_scale: Optional[float] = Field(
+        default=None,
+        description=(
+            "When set, episode step budget scales with backlog size n: "
+            "round(max_steps_scale * n**max_steps_n_exponent), clamped to at least 1 "
+            "and optionally max_steps_cap. Ignores fixed max_steps for the terminal condition."
+        ),
+    )
+    max_steps_n_exponent: float = Field(
+        default=1.0,
+        ge=0.0,
+        description=(
+            "Exponent on n when using max_steps_scale (1 ≈ O(n) horizon, 2 ≈ O(n²) headroom)."
+        ),
+    )
+    max_steps_cap: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional upper bound on the proportional step budget (only used when max_steps_scale is set).",
+    )
     max_reference_tickets: int = Field(default=5, description="Maximum number of references an agent can request on a step.")
-    max_heurestics: int = Field(default=10, description="Maximum number of heuristics in an observation on a step.")
+    max_heuristics: int = Field(default=10, description="Maximum number of heuristics in an observation on a step.")
     step_penalty_min_gain_fraction: float = Field(
         default=0.5,
         gt=0.0,
@@ -64,6 +90,13 @@ class TicketOrderingConfig(BaseModel):
         ge=0.0,
         description="Weight on marginal optimality change (how much this action improved or hurt the ordering).",
     )
+
+    @model_validator(mode="after")
+    def _validate_proportional_steps(self) -> "TicketOrderingConfig":
+        if self.max_steps_scale is not None and self.max_steps_scale <= 0:
+            raise ValueError("max_steps_scale must be positive when set")
+        return self
+
 
 class TicketOrderingState(State):
     """State for the Ticket Ordering environment."""
@@ -95,6 +128,10 @@ class TicketOrderingObservation(Observation):
     completed_iterations: int = Field(
         default=0,
         description="Number of ordering steps completed so far in the current episode."
+    )
+    max_steps: int = Field(
+        ge=1,
+        description="Step budget for this episode; episode ends when completed_iterations reaches this (unless end_ordering).",
     )
 
 

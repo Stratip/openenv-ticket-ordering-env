@@ -24,7 +24,6 @@ ENV_BASE = "https://startripper-openenv-ticket-ordering-env.hf.space"
 API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME = os.getenv("MODEL_NAME") or "llama-3.1-8b-instant"
-MAX_STEPS = 15
 TEMPERATURE = 0.1 # Kind of makes these models TOO deterministic / repeat things, oh well, rules are rules.
 MAX_TOKENS = 300
 SUCCESS_SCORE_THRESHOLD = 0.75
@@ -120,6 +119,7 @@ def build_user_prompt(obs: Any) -> str:
 
         Total tickets: {obs.total_tickets}
         Completed iterations: {obs.completed_iterations}
+        Max steps (episode ends when iterations reach this unless you end early): {obs.max_steps}
 
         Decide the next action.
         """
@@ -169,8 +169,9 @@ def main() -> None:
             try:
                 result = env.reset(difficulty=task.value)
                 obs = result.observation
+                episode_max_steps = obs.max_steps
 
-                for step in range(1, MAX_STEPS + 1):
+                for step in range(1, episode_max_steps + 1):
                     if result.done:
                         break
 
@@ -207,7 +208,7 @@ def main() -> None:
 
                 ep_min, ep_max = _episode_return_bounds(
                     max(obs.total_tickets, 2),
-                    _REWARD_CFG.max_steps,
+                    episode_max_steps,
                 )
                 rewards_sum = sum(rewards)
                 rewards_sum -= ep_min
