@@ -126,6 +126,37 @@ def build_user_prompt(obs: Any) -> str:
     ).strip()
 
 
+def repair_action_dict_for_heuristics(
+    obs: TicketOrderingObservation, action_dict: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Clamp next_candidate_id and next_reference_ids to keys present in obs.ticket_heuristics."""
+    keys = list(obs.ticket_heuristics.keys())
+    if not keys:
+        return action_dict
+    repaired = dict(action_dict)
+    try:
+        nc = int(repaired.get("next_candidate_id", keys[0]))
+    except (TypeError, ValueError):
+        nc = keys[0]
+    if nc not in obs.ticket_heuristics:
+        nc = int(backup_rng.choice(keys))
+    repaired["next_candidate_id"] = nc
+
+    raw_refs = repaired.get("next_reference_ids", [])
+    if not isinstance(raw_refs, list):
+        raw_refs = []
+    good_refs: List[int] = []
+    for r in raw_refs:
+        try:
+            ri = int(r)
+        except (TypeError, ValueError):
+            continue
+        if ri in obs.ticket_heuristics:
+            good_refs.append(ri)
+    repaired["next_reference_ids"] = good_refs
+    return repaired
+
+
 def get_model_action(client: OpenAI, obs: TicketOrderingObservation) -> Dict[str, Any]:
     user_prompt = build_user_prompt(obs)
 
@@ -176,6 +207,7 @@ def main() -> None:
                         break
 
                     action_dict = get_model_action(client, obs)
+                    action_dict = repair_action_dict_for_heuristics(obs, action_dict)
 
                     action = TicketOrderingAction(
                         candidate_priority=int(action_dict.get("candidate_priority", 0)),
@@ -185,15 +217,19 @@ def main() -> None:
                         end_ordering=bool(action_dict.get("end_ordering", False)),
                     )
 
-                    result = env.step(action)
-                    obs = result.observation
-
-                    reward = result.reward or 0.0
-                    done = result.done
-                    error = None
-
-                    rewards.append(reward)
-                    steps_taken = step
+                    error: Optional[str] = None
+                    try:
+                        result = env.step(action)
+                        obs = result.observation
+                        reward = result.reward or 0.0
+                        done = result.done
+                    except Exception as e:
+                        error = str(e)
+                        reward = 0.0
+                        done = result.done
+                    else:
+                        rewards.append(reward)
+                        steps_taken = step
 
                     log_step(
                         step=step,
