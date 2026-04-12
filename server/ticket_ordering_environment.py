@@ -5,7 +5,10 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Ticket Ordering Environment Implementation.
+OpenEnv server implementation for ticket-ordering episodes.
+
+Exposes :class:`TicketOrderingEnvironment` for HTTP/WebSocket drivers; scoring helpers
+live on the same class so clients can align normalization with :meth:`TicketOrderingEnvironment.construct_reward`.
 """
 
 
@@ -50,17 +53,29 @@ except ImportError:
 
 class TicketOrderingEnvironment(Environment):
     """
-    An environment that orders tickets.
+    Multi-step environment: agent assigns priorities and summaries to tickets under a
+    text criterion, receives observations with a candidate and references, and is scored
+    by how much optimality (Spearman footrule vs ground-truth order) improves each step.
+
+    Each :meth:`reset` samples a synthetic problem (difficulty-controlled), shuffles tickets,
+    and sets the step budget from :class:`~models.TicketOrderingConfig`. Each :meth:`step`
+    applies the action, reorders tickets by heuristic priority, recomputes optimality, and
+    returns reward plus the next observation.
+
+    Attributes:
+        SUPPORTS_CONCURRENT_SESSIONS: When ``True``, the OpenEnv server may attach multiple
+            WebSocket clients with isolated instances (factory mode). This class keeps
+            per-instance state only.
     """
 
-    # Enable concurrent WebSocket sessions.
-    # Set to True if your environment isolates state between instances.
-    # When True, multiple WebSocket clients can connect simultaneously, each
-    # getting their own environment instance (when using factory mode in app.py).
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
 
-    def __init__(self):
-        """Initialize the ticket_ordering environment."""
+    def __init__(self) -> None:
+        """
+        Build default config, RNG, and placeholder state before the first :meth:`reset`.
+
+        The placeholder state satisfies validators; real episodes replace it on ``reset``.
+        """
 
         self._config = TicketOrderingConfig()
 
@@ -135,12 +150,26 @@ class TicketOrderingEnvironment(Environment):
         **kwargs: Any,
     ) -> TicketOrderingObservation:
         """
-        Reset the environment.
+        Start a new episode: generate criteria and tickets, shuffle, set optimality, step cap.
+
+        Args:
+            seed: NumPy RNG seed for shuffling and heuristic subsampling; ``None`` uses 42.
+            episode_id: Optional stable id for logging; default is a new UUID string.
+            difficulty: ``GenerationDifficulty`` enum value (0=easy, 1=medium, 2=hard).
+            max_steps: Fixed horizon when ``max_steps_scale`` is unset in config; overridden
+                by proportional scaling when scale is set.
+            max_steps_scale: If not ``None``, episode length scales with ticket count ``n``
+                (rounded ``scale * n**exponent``, optional cap); overrides fixed ``max_steps``
+                for the terminal condition.
+            max_steps_cap: Optional upper bound on scaled step budget.
+            max_steps_n_exponent: Exponent on ``n`` when using ``max_steps_scale``.
+            **kwargs: Ignored; reserved for OpenEnv compatibility.
 
         Returns:
-            TicketOrderingObservation
+            Initial :class:`~models.TicketOrderingObservation` with ``done=False``,
+            ``reward=0.0``, criteria, first candidate, references, heuristics subset, and
+            ``max_steps`` set to this episode's budget.
         """
-
         self._reset_count += 1
 
         self.rng = np.random.default_rng(seed if seed is not None else 42)
@@ -205,17 +234,23 @@ class TicketOrderingEnvironment(Environment):
 
     def step(self, action: TicketOrderingAction) -> TicketOrderingObservation:  # type: ignore[override]
         """
-        Execute a step in the environment.
+        Apply ``action`` to the current candidate, advance state, and return the next observation.
 
         Args:
-            action: TicketOrderingAction containing the assigned priority and summary for the candidate ticket,
-            next reference ticket ids, next candidate ticket id and whether or not ordering should stop (in case
-            the agent decides ordering has "reached optimality" at any point in time)
+            action: Priority and summary for the current candidate, next reference ticket ids
+                (subset of keys from the last observation's ``ticket_heuristics``), next
+                candidate id (also a key in ``ticket_heuristics``), and ``end_ordering`` to
+                request early termination.
 
         Returns:
-            TicketOrderingObservation
-        """
+            :class:`~models.TicketOrderingObservation` with updated candidate, references,
+            heuristics, step count, per-step ``reward``, and ``done`` if ``end_ordering`` or
+            the step budget is exhausted.
 
+        Raises:
+            ValueError: If ``next_candidate_id`` or any ``next_reference_ids`` entry is not
+                among the ids in ``ticket_heuristics`` for this step.
+        """
         self._validate_action_against_heuristics(action)
 
         previous_state = deepcopy(self._state)
@@ -236,12 +271,12 @@ class TicketOrderingEnvironment(Environment):
     @property
     def state(self) -> TicketOrderingState:
         """
-        Get the current environment state.
+        Snapshot of the live episode: criteria, ground-truth order, tickets, optimality, step count.
 
         Returns:
-            Current State with episode_id and step_count
+            :class:`~models.TicketOrderingState` after the last completed ``reset`` or ``step``.
         """
-        return self._state    
+        return self._state
 
 
     def select_candidate(self, state: TicketOrderingState, action: TicketOrderingAction) -> Ticket:
@@ -338,6 +373,19 @@ class TicketOrderingEnvironment(Environment):
         ``sum_t r_t = w * (final_optimality - initial_optimality) - num_steps * lam`` where
         ``w`` is ``action_optimality_weight`` and ``lam`` matches per-step penalty in
         :meth:`construct_reward` (uses ``smallest_optimality_quantum(n_tickets)``).
+
+        Args:
+            n_tickets: Backlog size ``n`` used for the per-step penalty quantum (must match
+                the episode's ticket count for correct bounds).
+            num_steps: Episode horizon (e.g. observation ``max_steps``) used to multiply the
+                per-step penalty in the bound.
+            config: Reward/step hyperparameters; default matches a fresh
+                :class:`~models.TicketOrderingConfig` (callers should pass the server config
+                if it differs from defaults).
+
+        Returns:
+            ``(min_return, max_return)`` suitable for linearly rescaling summed step rewards
+            to ``[0, 1]``.
         """
         cfg = config or TicketOrderingConfig()
         w = cfg.action_optimality_weight
@@ -345,7 +393,16 @@ class TicketOrderingEnvironment(Environment):
         return (-w - lam * num_steps, w - lam * num_steps)
 
     def episode_return_bounds(self, n_tickets: int, num_steps: int) -> tuple[float, float]:
-        """Like :meth:`compute_episode_return_bounds` using this instance's config."""
+        """
+        Episode return bounds using this environment's loaded :class:`~models.TicketOrderingConfig`.
+
+        Args:
+            n_tickets: Ticket count for the quantum in the penalty term.
+            num_steps: Step budget for the episode.
+
+        Returns:
+            Same as :meth:`compute_episode_return_bounds` with ``config=self._config``.
+        """
         return self.compute_episode_return_bounds(n_tickets, num_steps, config=self._config)
 
     def get_updated_state(self, previous_state: TicketOrderingState, candidate: Ticket, action: TicketOrderingAction) -> TicketOrderingState:
