@@ -183,6 +183,19 @@ class TicketOrderingEnvironment(Environment):
         )
 
 
+    def _validate_action_against_heuristics(self, action: TicketOrderingAction) -> None:
+        """Require next candidate and every next reference id to appear in the step's heuristic keys."""
+        allowed = frozenset(self._current_heuristics.keys())
+        if action.next_candidate_id not in allowed:
+            raise ValueError(
+                f"next_candidate_id {action.next_candidate_id} is not in ticket_heuristics keys {sorted(allowed)}"
+            )
+        bad_refs = [rid for rid in action.next_reference_ids if rid not in allowed]
+        if bad_refs:
+            raise ValueError(
+                f"next_reference_ids {bad_refs} are not in ticket_heuristics keys {sorted(allowed)}"
+            )
+
     def step(self, action: TicketOrderingAction) -> TicketOrderingObservation:  # type: ignore[override]
         """
         Execute a step in the environment.
@@ -195,6 +208,8 @@ class TicketOrderingEnvironment(Environment):
         Returns:
             TicketOrderingObservation
         """
+
+        self._validate_action_against_heuristics(action)
 
         previous_state = deepcopy(self._state)
 
@@ -224,28 +239,17 @@ class TicketOrderingEnvironment(Environment):
 
     def select_candidate(self, state: TicketOrderingState, action: TicketOrderingAction) -> Ticket:
         id_index_map = self._make_id_index_map(state.tickets)
-
-        if action.next_candidate_id in id_index_map:
-            candidate_ticket_index = id_index_map[action.next_candidate_id]
-        else:
-            candidate_ticket_index = id_index_map[state.tickets[0].id]
-
+        candidate_ticket_index = id_index_map[action.next_candidate_id]
         return deepcopy(state.tickets[candidate_ticket_index])
 
 
     def select_references(self, state: TicketOrderingState, action: TicketOrderingAction) -> list[Ticket]:
         id_index_map = self._make_id_index_map(state.tickets)
-        
-        reference_ticket_indices = []
-        for id in action.next_reference_ids[:self._config.max_reference_tickets]:
-            if id in id_index_map:
-                reference_ticket_indices.append(id_index_map[id])
-            else:
-                reference_ticket_indices.append(id_index_map[state.tickets[0].id])
-
-        return deepcopy(
-            [state.tickets[index] for index in reference_ticket_indices]
-        )
+        reference_ticket_indices = [
+            id_index_map[rid]
+            for rid in action.next_reference_ids[: self._config.max_reference_tickets]
+        ]
+        return deepcopy([state.tickets[index] for index in reference_ticket_indices])
 
 
     def select_heuristics(self, state: TicketOrderingState) -> dict[int, TicketHeuristic]:
