@@ -113,8 +113,15 @@ class TicketOrderingEnvironment(Environment):
             steps = max(1, int(round(raw)))
             if mcap is not None:
                 steps = min(steps, mcap)
-            return steps
-        return max(1, ms)
+        else:
+            steps = max(1, ms)
+
+        if steps < n:
+            logger.warning(
+                f"Episode max_steps ({steps}) is less than ticket count ({n}); "
+                "the horizon may end before every ticket has been a candidate.",
+            )
+        return steps
 
     def reset(
         self,
