@@ -50,6 +50,7 @@ An “objective scorer” doesn’t remove judgment—it **structures it**. You 
 - [Building the Docker Image](#building-the-docker-image)
 - [Deploying to Hugging Face Spaces](#deploying-to-hugging-face-spaces)
 - [Environment Details](#environment-details)
+- [Benchmark results](#benchmark-results)
 - [Advanced Usage](#advanced-usage)
 - [Development & Testing](#development--testing)
 - [Project Structure](#project-structure)
@@ -172,7 +173,7 @@ The deployed space includes:
 
 ### Observation
 **TicketOrderingObservation**: Contains the following:
-- `reward` (float) - Reward based on last priority assignment and end ordering decision.
+- `reward` (float) - Weighted change in global optimality from this step, minus a small per-step cost.
 - `done` (bool) - True if `end_ordering` is set to true in the action or the episode has reached the maximum step count.
 - `metadata` (dict) - Additional info.
 
@@ -185,12 +186,19 @@ The deployed space includes:
 
 
 ### Reward
-The reward is calculated as: `(post_action_optimality - pre_action_optimality) - (1.5 - current_step / max_steps) * action_end_ordering`
+Each step: `action_optimality_weight * Δoptimality - step_penalty_min_gain_fraction * smallest_optimality_quantum(n)`, where `n` is ticket count and `smallest_optimality_quantum(n) = 2 / footrule_max_distance(n)` (smallest gap between distinct optimality scores). That fraction stays in `(0,1)`, so penalty always stays below one “quantum” of improvement—flat steps net negative; any improving step beats equal count of no-op steps. Summed return still telescopes net optimality gain minus total step costs.
+
+## Benchmark results
+
+Normalized episode scores (see `inference.py`: reward sum scaled to the [0, 1] interval using per-episode bounds) for synthetic problems by difficulty:
+
+| Model | Easy | Medium | Hard |
+| --- | ---: | ---: | ---: |
+| `llama-3.1-8b-instant` | 0.753 | 0.741 | 0.694 |
 
 ## Advanced Usage
 
 ### Connecting to an Existing Server
-
 If you already have a Ticket Ordering environment server running, you can connect directly:
 
 ```python
