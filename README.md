@@ -26,6 +26,8 @@ When incentives diverge, “priority” becomes a negotiation. This project make
 ## Table of contents
 
 - [Why prioritization breaks](#why-prioritization-breaks)
+- [Observation and action (plain English)](#observation-and-action-plain-english)
+- [Motivation](#motivation)
 - [API surface](#api-surface)
 - [Example](#example)
 - [Environment Details](#environment-details)
@@ -46,6 +48,35 @@ An “objective scorer” doesn’t remove judgment—it **structures it**. You 
 - **Explainability**: the criteria and summaries capture the *why*, not just the number.
 - **Repeatability**: rerun ordering when constraints change (release week vs normal week) and measure deltas.
 - **Less conflict**: disagreements become “which criterion weights are wrong?” rather than “your priority is wrong.”
+
+## Observation and action (plain English)
+
+### **What you see each step**
+
+- A **partial view** of the episode: not every ticket in one shot.
+- **`ordering_criteria`** — shared rubric for the whole episode.
+- **`candidate_ticket`** — the item currently under review.
+- **`reference_tickets`** — a small anchor set the agent asked for on the prior step.
+- **`ticket_heuristics`** — running table of **priority + short summary** per ticket id already touched.
+- **`total_tickets`** — size of the backlog to be ordered; note this down as **n** (number of tickets to order).
+- **`completed_iterations`** — how many steps have run so far.
+
+### **What you do each step**
+
+- Set **`candidate_priority`** and **`candidate_summary`** for the current candidate.
+- Choose **`next_reference_ids`** and **`next_candidate_id`** to steer the **next** observation.
+- Set **`end_ordering`** to finish the episode early when the ranking is good enough.
+- Otherwise the run stops when **`completed_iterations` reaches `max_steps`** — so no single observation has to materialize all **n** full tickets at once.
+
+## Motivation
+
+In decoder-only transformers, self-attention over context length *L* scales as **O(L²)** per layer (pairwise token interactions). If the whole backlog is placed in one prompt, *L* grows with the amount of material in that prompt, so each forward pass becomes relatively expensive. At larger backlogs this pattern is often **slow** and **resource-heavy** compared to keeping contexts short.
+
+This setup does **not** ask the model to ingest every ticket at once. Each observation is limited to a **candidate**, a **small reference set**, and a **capped** summary of what has already been decided. **n** (the **`total_tickets`** field) then enters mainly through the allowed number of steps (**`max_steps`**, and optional **`end_ordering`**), rather than through how many tickets must sit in a single attention matrix. The hope is to ease the **quadratic-in-context-length** cost that arises when a prompt is sized to include the whole backlog at once (often discussed as **O(n²)** when *L* grows with **n**).
+
+**`max_steps`** is configurable by design. Setting it on the order of **n** gives a short, **one-shot**-like horizon; setting it on the order of **n²** leaves more room for cross-comparison if that is what you need. Those are **examples** only—the same API also supports values in between and other settings without branching the implementation.
+
+Per-step reward is marginal improvement in ordering quality minus a step cost (see the reward subsection below). Structurally, that should favor moves that still meaningfully improve the ranking over extra steps that barely change it. A single end-to-end prompt that asks for a full ordering in one reply does **not** offer an equivalent **step-level** signal; it can still work well in small cases, but it **cannot**, on its own, express the same graded feedback across intermediate decisions.
 
 ## API surface
 
