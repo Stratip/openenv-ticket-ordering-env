@@ -63,7 +63,6 @@ class TicketOrderingEnvironment(Environment):
         """Initialize the ticket_ordering environment."""
 
         self._config = TicketOrderingConfig()
-        self._episode_max_steps: int = self._config.max_steps
 
         self._reset_count = 0
 
@@ -89,6 +88,7 @@ class TicketOrderingEnvironment(Environment):
         )
         self._current_references: list[Ticket] = []
         self._current_heuristics: dict[int, TicketHeuristic] = {}
+        self._episode_max_steps = self._resolve_episode_max_steps(len(self._state.tickets))
 
     def _resolve_episode_max_steps(
         self,

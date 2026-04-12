@@ -55,11 +55,12 @@ class TicketOrderingConfig(BaseModel):
         description="Fixed maximum steps per episode when max_steps_scale is not set.",
     )
     max_steps_scale: Optional[float] = Field(
-        default=None,
+        default=2.0,
         description=(
             "When set, episode step budget scales with backlog size n: "
             "round(max_steps_scale * n**max_steps_n_exponent), clamped to at least 1 "
-            "and optionally max_steps_cap. Ignores fixed max_steps for the terminal condition."
+            "and optionally max_steps_cap. Ignores fixed max_steps for the terminal condition. "
+            "Default 2 with max_steps_n_exponent 1 is linear 2 steps per ticket."
         ),
     )
     max_steps_n_exponent: float = Field(
