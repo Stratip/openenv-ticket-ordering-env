@@ -3,11 +3,17 @@ import asyncio
 import textwrap
 import numpy as np
 from openai import OpenAI
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 from client import TicketOrderingEnv
 from problem_generator import GenerationDifficulty
-from models import TicketHeuristic, TicketOrderingAction, TicketOrderingObservation
+from models import (
+    TicketHeuristic,
+    TicketOrderingAction,
+    TicketOrderingObservation,
+    TicketOrderingConfig,
+    smallest_optimality_quantum,
+)
 
 
 backup_rng = np.random.default_rng(42)
@@ -19,10 +25,18 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME = os.getenv("MODEL_NAME") or "llama-3.1-8b-instant"
 MAX_STEPS = 15
-TEMPERATURE = 0.0 # Kind of makes these models TOO deterministic / repeat things, oh well, rules are rules.
+TEMPERATURE = 0.1 # Kind of makes these models TOO deterministic / repeat things, oh well, rules are rules.
 MAX_TOKENS = 300
 SUCCESS_SCORE_THRESHOLD = 0.75
 UNASSIGNED_HEURISTIC = "unassigned"
+
+_REWARD_CFG = TicketOrderingConfig()
+
+
+def _episode_return_bounds(n_tickets: int, steps: int) -> Tuple[float, float]:
+    """Match env: per-step cost = fraction * smallest_optimality_quantum(n)."""
+    lam = _REWARD_CFG.step_penalty_min_gain_fraction * smallest_optimality_quantum(n_tickets)
+    return -1.0 - lam * steps, 1.0 - lam
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
@@ -32,13 +46,13 @@ SYSTEM_PROMPT = textwrap.dedent(
     - ordering criteria
     - reference tickets
     - a candidate ticket
-    - heuristics from n most- and least-assigned tickets (times_assigned = prior steps as candidate; 0 until one completes, including first-time candidate; priority/summary "unassigned" while 0)
+    - heuristics from n most- and least-assigned tickets (times_assigned = prior steps as candidate; 0 until one completes, including first-time candidate)
     - total number of tickets
     - iterations completed so far
 
     Your job:
     - Assign a priority score to the candidate (0 to 100) (int, 0 = not important AT ALL, 100 = EXTREMELY important)
-    - Write a short summary for the candidate (<=32 chars) (Part of that ticket's heuristic)
+    - Write a short summary for the candidate (<=32 chars) (Part of that ticket's heuristic), this is to help choose the next reference and candidate ticket.
     - Select next reference ticket ids (must be one of the keys from the heuristics)
     - Select next candidate ticket id (must be one of the keys from the heuristics)
     - Decide whether to end ordering (there is no need to end after iterations completed = total tickets since cross comparing tickets still may be valuable)
@@ -191,11 +205,13 @@ def main() -> None:
                     if done:
                         break
 
-                min_reward = -1.0
-                max_reward = 2.0
+                ep_min, ep_max = _episode_return_bounds(
+                    max(obs.total_tickets, 2),
+                    _REWARD_CFG.max_steps,
+                )
                 rewards_sum = sum(rewards)
-                rewards_sum -= min_reward
-                rewards_sum /= (max_reward - min_reward)
+                rewards_sum -= ep_min
+                rewards_sum /= ep_max - ep_min
                 score = min(max(rewards_sum, 0.0), 1.0)
                 success = score >= SUCCESS_SCORE_THRESHOLD
 

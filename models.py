@@ -16,6 +16,18 @@ from pydantic import BaseModel, Field
 from openenv.core.env_server import State, Observation, Action
 
 
+def footrule_max_distance(n: int) -> float:
+    """Maximum Spearman footrule distance for permutations of length ``n`` (env normalizer)."""
+    if n <= 1:
+        return 1.0
+    return (n * n) / 2.0 if n % 2 == 0 else (n * n - 1) / 2.0
+
+
+def smallest_optimality_quantum(n: int) -> float:
+    """Smallest positive gap between two distinct optimality scores for ``n`` tickets."""
+    return 2.0 / footrule_max_distance(n)
+
+
 class ThreadComment(BaseModel):
     user: str = Field(min_length=1, max_length=16, description="Username of user commenting on the thread")
     content: str = Field(min_length=1, max_length=1024, description="Content of the user's comment on the thread.")
@@ -38,6 +50,20 @@ class TicketOrderingConfig(BaseModel):
     max_steps: int = Field(default=50, description="Maximum number of steps in an episode.")
     max_reference_tickets: int = Field(default=5, description="Maximum number of references an agent can request on a step.")
     max_heurestics: int = Field(default=10, description="Maximum number of heuristics in an observation on a step.")
+    step_penalty_min_gain_fraction: float = Field(
+        default=0.5,
+        gt=0.0,
+        lt=1.0,
+        description=(
+            "Per-step cost = fraction * smallest_optimality_quantum(n). "
+            "Must stay < 1 so any strict improvement yields positive net reward vs flat steps."
+        ),
+    )
+    action_optimality_weight: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Weight on marginal optimality change (how much this action improved or hurt the ordering).",
+    )
 
 class TicketOrderingState(State):
     """State for the Ticket Ordering environment."""

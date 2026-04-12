@@ -23,10 +23,28 @@ logger.setLevel(logging.DEBUG)
 
 
 try:
-    from models import Ticket, TicketHeuristic, TicketOrderingConfig, TicketOrderingState, TicketOrderingObservation, TicketOrderingAction
+    from models import (
+        Ticket,
+        TicketHeuristic,
+        TicketOrderingConfig,
+        TicketOrderingState,
+        TicketOrderingObservation,
+        TicketOrderingAction,
+        footrule_max_distance,
+        smallest_optimality_quantum,
+    )
     from problem_generator import generate_problem_statement, GenerationDifficulty
 except ImportError:
-    from ..models import Ticket, TicketHeuristic, TicketOrderingConfig, TicketOrderingState, TicketOrderingObservation, TicketOrderingAction
+    from ..models import (
+        Ticket,
+        TicketHeuristic,
+        TicketOrderingConfig,
+        TicketOrderingState,
+        TicketOrderingObservation,
+        TicketOrderingAction,
+        footrule_max_distance,
+        smallest_optimality_quantum,
+    )
     from ..problem_generator import generate_problem_statement, GenerationDifficulty
 
 
@@ -219,7 +237,7 @@ class TicketOrderingEnvironment(Environment):
     ) -> TicketOrderingObservation:
         observation = TicketOrderingObservation(
             done=action.end_ordering or (new_state.step_count >= self._config.max_steps),
-            reward=self.construct_reward(previous_state, new_state, action),
+            reward=self.construct_reward(previous_state, new_state),
 
             ordering_criteria=new_state.ordering_criteria,
             reference_tickets=self._current_references,
@@ -237,27 +255,23 @@ class TicketOrderingEnvironment(Environment):
         self,
         previous_state: TicketOrderingState,
         new_state: TicketOrderingState,
-        action: TicketOrderingAction,
     ) -> float:
-        reward = 0.0
+        """
+        Per-step reward = (weight * marginal optimality) - step_penalty(n).
 
-        improvement = new_state.optimality - previous_state.optimality
+        Step cost scales with ticket count: smallest distinct optimality jump is
+        ``2 / footrule_max_distance(n)``; penalty is a fraction of that, so any step that
+        improves optimality beats the same number of flat steps.
 
-        # Actually really good reward metric because huge reorders are rewarded / penalized hugely
-        # but small ones are rewarded / penalized slightly (proportional, smooth reward metric).
-        # RL algorithms are usually built with a value decay anyways (gamma) this means early-large reorders are prioritized more than late-large ones
-        reward += improvement
-
-        # Ending ordering comes on purpose comes with consequences! Ending early with an optimality of more than 0.5 is rewarded
-        # while ending it with an optimality of less than 0.5 is punished.
-        #
-        # More steps taken results in lessened importance to this reward signal overall, a more careful agent that takes more steps is to be
-        # rewarded and punished less than an overly aggressive and unreliable one. Note that an aggressive but reliably high performing
-        # agent is still rewarded greatly.
-        if action.end_ordering:
-            reward += (new_state.optimality * 2.0 - 1.0) * (1.5 - new_state.step_count / self._config.max_steps)
-
-        return reward
+        Episode return telescopes to:
+            sum_t r_t = w * (final_optimality - initial_optimality) - sum_t penalty(n)
+        """
+        w = self._config.action_optimality_weight
+        n = len(new_state.tickets)
+        min_gain = smallest_optimality_quantum(n)
+        lam = self._config.step_penalty_min_gain_fraction * min_gain
+        delta = new_state.optimality - previous_state.optimality
+        return w * delta - lam
 
 
     def get_updated_state(self, previous_state: TicketOrderingState, candidate: Ticket, action: TicketOrderingAction) -> TicketOrderingState:
@@ -312,10 +326,7 @@ class TicketOrderingEnvironment(Environment):
             accumulated_distance += distance
 
         n = len(a)
-        if n > 1:
-            max_distance = (n * n) / 2.0 if n % 2 == 0 else (n * n - 1) / 2.0
-        else:
-            max_distance = 1.0
+        max_distance = footrule_max_distance(n)
 
         normalized_distance = accumulated_distance / max_distance
 
