@@ -324,6 +324,29 @@ class TicketOrderingEnvironment(Environment):
         delta = new_state.optimality - previous_state.optimality
         return w * delta - lam
 
+    @staticmethod
+    def compute_episode_return_bounds(
+        n_tickets: int,
+        num_steps: int,
+        *,
+        config: Optional[TicketOrderingConfig] = None,
+    ) -> tuple[float, float]:
+        """
+        Min/max possible undiscounted episode return for ``num_steps`` steps at fixed ``n_tickets``.
+
+        Same telescoping identity as :meth:`construct_reward`: with optimality in ``[0, 1]``,
+        ``sum_t r_t = w * (final_optimality - initial_optimality) - num_steps * lam`` where
+        ``w`` is ``action_optimality_weight`` and ``lam`` matches per-step penalty in
+        :meth:`construct_reward` (uses ``smallest_optimality_quantum(n_tickets)``).
+        """
+        cfg = config or TicketOrderingConfig()
+        w = cfg.action_optimality_weight
+        lam = cfg.step_penalty_min_gain_fraction * smallest_optimality_quantum(n_tickets)
+        return (-w - lam * num_steps, w - lam * num_steps)
+
+    def episode_return_bounds(self, n_tickets: int, num_steps: int) -> tuple[float, float]:
+        """Like :meth:`compute_episode_return_bounds` using this instance's config."""
+        return self.compute_episode_return_bounds(n_tickets, num_steps, config=self._config)
 
     def get_updated_state(self, previous_state: TicketOrderingState, candidate: Ticket, action: TicketOrderingAction) -> TicketOrderingState:
         id_index_map = self._make_id_index_map(previous_state.tickets)

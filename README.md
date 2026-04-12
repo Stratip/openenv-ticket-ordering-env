@@ -138,7 +138,7 @@ Per step: `action_optimality_weight * Δoptimality - step_penalty_min_gain_fract
 
 ## Benchmark results
 
-Normalized episode scores (`inference.py`: reward sum scaled [0,1] per episode bounds), synthetic problems:
+Normalized episode scores (reward sum scaled to [0, 1] using `TicketOrderingEnvironment.compute_episode_return_bounds`, aligned with `construct_reward`), synthetic problems:
 
 | Model | Easy | Medium | Hard |
 | --- | ---: | ---: | ---: |

@@ -3,7 +3,7 @@ import asyncio
 import textwrap
 import numpy as np
 from openai import OpenAI
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 
 from client import TicketOrderingEnv
 from problem_generator import GenerationDifficulty
@@ -11,9 +11,12 @@ from models import (
     TicketHeuristic,
     TicketOrderingAction,
     TicketOrderingObservation,
-    TicketOrderingConfig,
-    smallest_optimality_quantum,
 )
+
+try:
+    from server.ticket_ordering_environment import TicketOrderingEnvironment
+except ModuleNotFoundError:
+    from ticket_ordering.server.ticket_ordering_environment import TicketOrderingEnvironment
 
 
 backup_rng = np.random.default_rng(42)
@@ -28,14 +31,6 @@ TEMPERATURE = 0.1 # Kind of makes these models TOO deterministic / repeat things
 MAX_TOKENS = 300
 SUCCESS_SCORE_THRESHOLD = 0.75
 UNASSIGNED_HEURISTIC = "unassigned"
-
-_REWARD_CFG = TicketOrderingConfig()
-
-
-def _episode_return_bounds(n_tickets: int, steps: int) -> Tuple[float, float]:
-    """Match env: per-step cost = fraction * smallest_optimality_quantum(n)."""
-    lam = _REWARD_CFG.step_penalty_min_gain_fraction * smallest_optimality_quantum(n_tickets)
-    return -1.0 - lam * steps, 1.0 - lam
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
@@ -242,7 +237,7 @@ def main() -> None:
                     if done:
                         break
 
-                ep_min, ep_max = _episode_return_bounds(
+                ep_min, ep_max = TicketOrderingEnvironment.compute_episode_return_bounds(
                     max(obs.total_tickets, 2),
                     episode_max_steps,
                 )
