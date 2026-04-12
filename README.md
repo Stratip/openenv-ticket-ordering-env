@@ -13,6 +13,8 @@ tags:
 
 # Ticket Ordering Environment
 
+**Elevator pitch:** Backlog priority devolves into politics when incentives clash. **Ticket Ordering** is an OpenEnv that makes ordering **measurable**: agents score **one candidate at a time** against a **shared rubric**, see only **bounded context** (not the whole backlog in one shot), and get **per-step reward**—so rankings stay **explainable**, **replayable**, and usable for humans **or** other models.
+
 **Ticket Ordering** is an environment for turning a messy “who shouts loudest” backlog into a **repeatable, auditable ordering** of work items (GitHub issues, Jira tickets, support requests, bugs, etc.) using an **objective scoring rubric**.
 
 It’s especially useful when **QA testers**, **engineering**, and **third-party stakeholders** (customers, partners, vendors) have **contradictory priorities** depending on the situation:
