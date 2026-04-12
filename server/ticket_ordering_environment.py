@@ -7,8 +7,9 @@
 """
 OpenEnv server implementation for ticket-ordering episodes.
 
-Exposes :class:`TicketOrderingEnvironment` for HTTP/WebSocket drivers; scoring helpers
-live on the same class so clients can align normalization with :meth:`TicketOrderingEnvironment.construct_reward`.
+Exposes :class:`TicketOrderingEnvironment` for HTTP/WebSocket drivers. Episode return
+bounds for client-side score normalization live in :func:`models.compute_episode_return_bounds`
+alongside reward hyperparameters.
 """
 
 
@@ -35,6 +36,7 @@ try:
         TicketOrderingAction,
         footrule_max_distance,
         smallest_optimality_quantum,
+        compute_episode_return_bounds,
     )
     from problem_generator import generate_problem_statement, GenerationDifficulty
 except ImportError:
@@ -47,6 +49,7 @@ except ImportError:
         TicketOrderingAction,
         footrule_max_distance,
         smallest_optimality_quantum,
+        compute_episode_return_bounds,
     )
     from ..problem_generator import generate_problem_statement, GenerationDifficulty
 
@@ -359,39 +362,6 @@ class TicketOrderingEnvironment(Environment):
         delta = new_state.optimality - previous_state.optimality
         return w * delta - lam
 
-    @staticmethod
-    def compute_episode_return_bounds(
-        n_tickets: int,
-        num_steps: int,
-        *,
-        config: Optional[TicketOrderingConfig] = None,
-    ) -> tuple[float, float]:
-        """
-        Min/max possible undiscounted episode return for ``num_steps`` steps at fixed ``n_tickets``.
-
-        Same telescoping identity as :meth:`construct_reward`: with optimality in ``[0, 1]``,
-        ``sum_t r_t = w * (final_optimality - initial_optimality) - num_steps * lam`` where
-        ``w`` is ``action_optimality_weight`` and ``lam`` matches per-step penalty in
-        :meth:`construct_reward` (uses ``smallest_optimality_quantum(n_tickets)``).
-
-        Args:
-            n_tickets: Backlog size ``n`` used for the per-step penalty quantum (must match
-                the episode's ticket count for correct bounds).
-            num_steps: Episode horizon (e.g. observation ``max_steps``) used to multiply the
-                per-step penalty in the bound.
-            config: Reward/step hyperparameters; default matches a fresh
-                :class:`~models.TicketOrderingConfig` (callers should pass the server config
-                if it differs from defaults).
-
-        Returns:
-            ``(min_return, max_return)`` suitable for linearly rescaling summed step rewards
-            to ``[0, 1]``.
-        """
-        cfg = config or TicketOrderingConfig()
-        w = cfg.action_optimality_weight
-        lam = cfg.step_penalty_min_gain_fraction * smallest_optimality_quantum(n_tickets)
-        return (-w - lam * num_steps, w - lam * num_steps)
-
     def episode_return_bounds(self, n_tickets: int, num_steps: int) -> tuple[float, float]:
         """
         Episode return bounds using this environment's loaded :class:`~models.TicketOrderingConfig`.
@@ -401,9 +371,9 @@ class TicketOrderingEnvironment(Environment):
             num_steps: Step budget for the episode.
 
         Returns:
-            Same as :meth:`compute_episode_return_bounds` with ``config=self._config``.
+            Same as :func:`models.compute_episode_return_bounds` with ``config=self._config``.
         """
-        return self.compute_episode_return_bounds(n_tickets, num_steps, config=self._config)
+        return compute_episode_return_bounds(n_tickets, num_steps, config=self._config)
 
     def get_updated_state(self, previous_state: TicketOrderingState, candidate: Ticket, action: TicketOrderingAction) -> TicketOrderingState:
         id_index_map = self._make_id_index_map(previous_state.tickets)

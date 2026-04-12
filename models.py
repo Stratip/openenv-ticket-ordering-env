@@ -99,6 +99,38 @@ class TicketOrderingConfig(BaseModel):
         return self
 
 
+def compute_episode_return_bounds(
+    n_tickets: int,
+    num_steps: int,
+    *,
+    config: Optional[TicketOrderingConfig] = None,
+) -> tuple[float, float]:
+    """
+    Min/max possible undiscounted episode return for ``num_steps`` steps at fixed ``n_tickets``.
+
+    Same telescoping identity as server per-step reward: with optimality in ``[0, 1]``,
+    ``sum_t r_t = w * (final_optimality - initial_optimality) - num_steps * lam`` where
+    ``w`` is ``action_optimality_weight`` and ``lam`` matches the per-step penalty term
+    (``step_penalty_min_gain_fraction * smallest_optimality_quantum(n_tickets)``).
+
+    Args:
+        n_tickets: Backlog size ``n`` used for the per-step penalty quantum (must match
+            the episode's ticket count for correct bounds).
+        num_steps: Episode horizon (e.g. observation ``max_steps``) used to multiply the
+            per-step penalty in the bound.
+        config: Reward/step hyperparameters; default matches a fresh :class:`TicketOrderingConfig`
+            (pass the server's config if it differs from defaults).
+
+    Returns:
+        ``(min_return, max_return)`` suitable for linearly rescaling summed step rewards
+        to ``[0, 1]``.
+    """
+    cfg = config or TicketOrderingConfig()
+    w = cfg.action_optimality_weight
+    lam = cfg.step_penalty_min_gain_fraction * smallest_optimality_quantum(n_tickets)
+    return (-w - lam * num_steps, w - lam * num_steps)
+
+
 class TicketOrderingState(State):
     """State for the Ticket Ordering environment."""
     ordering_criteria: str = Field(max_length=32, description="Criteria by which tickets are to be ordered.")

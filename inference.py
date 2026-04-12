@@ -11,12 +11,8 @@ from models import (
     TicketHeuristic,
     TicketOrderingAction,
     TicketOrderingObservation,
+    compute_episode_return_bounds,
 )
-
-try:
-    from server.ticket_ordering_environment import TicketOrderingEnvironment
-except ModuleNotFoundError:
-    from ticket_ordering.server.ticket_ordering_environment import TicketOrderingEnvironment
 
 
 backup_rng = np.random.default_rng(42)
@@ -237,7 +233,7 @@ def main() -> None:
                     if done:
                         break
 
-                ep_min, ep_max = TicketOrderingEnvironment.compute_episode_return_bounds(
+                ep_min, ep_max = compute_episode_return_bounds(
                     max(obs.total_tickets, 2),
                     episode_max_steps,
                 )
